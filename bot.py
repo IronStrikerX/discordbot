@@ -5,8 +5,6 @@ from discord.ui import View, Button
 from dotenv import load_dotenv
 import os
 
-
-
 intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
@@ -27,6 +25,8 @@ MAX_ROUNDS = 5
 
 load_dotenv()
 TOKEN = os.getenv("DISCORD_TOKEN")
+
+game_channel = None
 
 class VoteView(View):
     def __init__(self, user):
@@ -90,38 +90,60 @@ class MissionView(View):
         await check_all_mission_votes(interaction)
 
 async def check_all_votes(interaction):
-    channel = interaction.guild.system_channel or interaction.channel
-    approvals = sum(votes.values())
-    if approvals > len(players) / 2:
-        await channel.send(" Team approved. Sending mission DMs...")
-        mission_votes.clear()
-        for p in current_team:
-            await p.send("You are on a mission. Choose your action:", view=MissionView(p))
-    else:
-        global captain_index
-        await channel.send("\u274C Team rejected. Captain passes to next player.")
-        captain_index = (captain_index + 1) % len(players)
-        await channel.send(f"New Team Captain: **{players[captain_index].mention}**")
+    if len(votes) == len(players):
+        approvals = [p for p in players if votes.get(p.id) is True]
+        rejections = [p for p in players if votes.get(p.id) is False]
+
+        channel = interaction.channel
+
+        if len(approvals) > len(players) / 2:
+            await channel.send("Team approved. Sending mission options to team members.")
+            mission_votes.clear()
+            for p in current_team:
+                await channel.send(f"{p.mention}, you are on a mission. Choose your action:", view=MissionView(p))
+        else:
+            global captain_index
+            await channel.send("Team rejected. Captain passes to the next player.")
+            captain_index = (captain_index + 1) % len(players)
+            await channel.send(f"New Team Captain: {players[captain_index].mention}")
+
+        vote_summary = "Voting Results:\n"
+        vote_summary += f"Approve: {', '.join(p.mention for p in approvals)}\n"
+        vote_summary += f"Reject: {', '.join(p.mention for p in rejections)}"
+        await channel.send(vote_summary)
+
 
 async def check_all_mission_votes(interaction):
     global round_number, captain_index
+
     if len(mission_votes) == len(current_team):
-        channel = interaction.guild.system_channel or interaction.channel
+        # Use the saved game_channel, fallback to interaction.channel if None
+        channel = game_channel or interaction.channel
+        
         results = list(mission_votes.values())
         random.shuffle(results)
         mission_results.append(results)
-        await channel.send(f" Mission #{round_number} Results:")
+
+        await channel.send(f"Mission #{round_number} results:")
         for r in results:
             await channel.send(r)
+
         round_number += 1
-        captain_index = (captain_index + 1) % len(players)
-        await channel.send(f" New Team Captain: **{players[captain_index].mention}**")
+
+        if round_number > MAX_ROUNDS:
+            await channel.send("Game over! The spies were:")
+            for s in spy_list:
+                await channel.send(f"{s.mention}")
+        else:
+            captain_index = (captain_index + 1) % len(players)
+            await channel.send(f"Next Team Captain: **{players[captain_index].mention}**")
 
 @bot.command()
 async def start(ctx):
-    global players, roles_assigned, spy_list, captain_index, round_number
+    global players, roles_assigned, spy_list, captain_index, round_number, game_channel
+    game_channel = ctx.channel  # Save the channel where game was started
     mentioned = ctx.message.mentions
-    if len(mentioned) < 5 or len(mentioned) > 10:
+    if len(mentioned) < 1 or len(mentioned) > 10:   #the min and max amount of player 5-10
         await ctx.send("Mention between 5 to 10 players.")
         return
 
@@ -137,7 +159,7 @@ async def start(ctx):
     mission_results.clear()
     current_team.clear()
 
-    spy_counts = {5: 2, 6: 2, 7: 3, 8: 3, 9: 3, 10: 4}
+    spy_counts = {1:1, 3:2, 5: 2, 6: 2, 7: 3, 8: 3, 9: 3, 10: 4}
     num_spies = spy_counts[len(players)]
 
     roles = ["Spy"] * num_spies + ["Resistance"] * (len(players) - num_spies)
@@ -174,7 +196,7 @@ async def team(ctx, *mentions: discord.Member):
         return
 
     votes.clear()
-    await ctx.send(f"Team Captain: **{ctx.author.mention}**\n\ud83d\udd35 Proposed team: {', '.join(p.mention for p in current_team)}")
+    await ctx.send(f"Team Captain: **{ctx.author.mention}** Proposed team: {', '.join(p.mention for p in current_team)}")
     for p in players:
         try:
             await p.send("Do you approve this team?", view=VoteView(p))
