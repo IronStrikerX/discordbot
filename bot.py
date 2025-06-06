@@ -159,7 +159,7 @@ async def start(ctx):
     mission_results.clear()
     current_team.clear()
 
-    spy_counts = {1:1, 3:2, 5: 2, 6: 2, 7: 3, 8: 3, 9: 3, 10: 4}
+    spy_counts = {1:1, 3:2, 4:1, 5: 2, 6: 2, 7: 3, 8: 3, 9: 3, 10: 4}
     num_spies = spy_counts[len(players)]
 
     roles = ["Spy"] * num_spies + ["Resistance"] * (len(players) - num_spies)
@@ -208,3 +208,4 @@ async def on_ready():
     print(f" Logged in as {bot.user}")
 
 bot.run(TOKEN)
+#testing
