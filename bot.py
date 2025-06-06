@@ -42,7 +42,7 @@ class VoteView(View):
             await interaction.response.send_message("You already voted.", ephemeral=True)
             return
         votes[interaction.user.id] = True
-        await interaction.response.send_message("You voted to APPROVE the team.", ephemeral=True)
+        await interaction.response.send_message("✅ You voted to APPROVE the team.", ephemeral=True)
         self.stop()
         if len(votes) == len(players):
             await check_all_votes(interaction)
@@ -56,7 +56,7 @@ class VoteView(View):
             await interaction.response.send_message("You already voted.", ephemeral=True)
             return
         votes[interaction.user.id] = False
-        await interaction.response.send_message("You voted to REJECT the team.", ephemeral=True)
+        await interaction.response.send_message("❌ You voted to REJECT the team.", ephemeral=True)
         self.stop()
         if len(votes) == len(players):
             await check_all_votes(interaction)
@@ -75,7 +75,7 @@ class MissionView(View):
             await interaction.response.send_message("This isn't your button!", ephemeral=True)
             return
         mission_votes[interaction.user.id] = "Pass"
-        await interaction.response.send_message("You submitted a PASS.", ephemeral=True)
+        await interaction.response.send_message("✅ You submitted a PASS.", ephemeral=True)
         self.stop()
         await check_all_mission_votes(interaction)
 
@@ -85,7 +85,7 @@ class MissionView(View):
             await interaction.response.send_message("This isn't your button!", ephemeral=True)
             return
         mission_votes[interaction.user.id] = "Fail"
-        await interaction.response.send_message("You submitted a FAIL.", ephemeral=True)
+        await interaction.response.send_message("❌ You submitted a FAIL.", ephemeral=True)
         self.stop()
         await check_all_mission_votes(interaction)
 
@@ -96,54 +96,59 @@ async def check_all_votes(interaction):
 
         channel = interaction.channel
 
+        vote_summary = """**Voting Results**\n\n**Approved by:**\n{}\n\n**Rejected by:**\n{}""".format(
+            '\n'.join(p.name for p in approvals) or "None",
+            '\n'.join(p.name for p in rejections) or "None"
+        )
+
         if len(approvals) > len(players) / 2:
-            await channel.send("Team approved. Sending mission options to team members.")
+            await channel.send("\n**✅ Team Approved! Sending mission choices to team members.**")
             mission_votes.clear()
             for p in current_team:
-                await channel.send(f"{p.mention}, you are on a mission. Choose your action:", view=MissionView(p))
+                await channel.send(f"{p.name}, you are on a mission. Choose your action:", view=MissionView(p))
         else:
             global captain_index
-            await channel.send("Team rejected. Captain passes to the next player.")
+            await channel.send("\n**❌ Team Rejected!** Captain passes to the next player.")
             captain_index = (captain_index + 1) % len(players)
-            await channel.send(f"New Team Captain: {players[captain_index].mention}")
+            await channel.send(f"**New Team Captain:** {players[captain_index].name}")
 
-        vote_summary = "Voting Results:\n"
-        vote_summary += f"Approve: {', '.join(p.mention for p in approvals)}\n"
-        vote_summary += f"Reject: {', '.join(p.mention for p in rejections)}"
         await channel.send(vote_summary)
-
 
 async def check_all_mission_votes(interaction):
     global round_number, captain_index
 
     if len(mission_votes) == len(current_team):
-        # Use the saved game_channel, fallback to interaction.channel if None
         channel = game_channel or interaction.channel
-        
         results = list(mission_votes.values())
         random.shuffle(results)
         mission_results.append(results)
 
-        await channel.send(f"Mission #{round_number} results:")
-        for r in results:
-            await channel.send(r)
+        team_names = ', '.join(p.name for p in current_team)
+        result_display = '\n'.join(results)
+        await channel.send(f"""
+**Mission #{round_number} Results**
+
+**Team Members:** {team_names}
+**Votes:**
+{result_display}
+""")
 
         round_number += 1
 
         if round_number > MAX_ROUNDS:
-            await channel.send("Game over! The spies were:")
+            await channel.send("**Game over! The spies were:**")
             for s in spy_list:
-                await channel.send(f"{s.mention}")
+                await channel.send(f"{s.name}")
         else:
             captain_index = (captain_index + 1) % len(players)
-            await channel.send(f"Next Team Captain: **{players[captain_index].mention}**")
+            await channel.send(f"**Next Team Captain:** {players[captain_index].name}")
 
 @bot.command()
 async def start(ctx):
     global players, roles_assigned, spy_list, captain_index, round_number, game_channel
-    game_channel = ctx.channel  # Save the channel where game was started
+    game_channel = ctx.channel
     mentioned = ctx.message.mentions
-    if len(mentioned) < 1 or len(mentioned) > 10:   #the min and max amount of player 5-10
+    if len(mentioned) < 1 or len(mentioned) > 10:
         await ctx.send("Mention between 5 to 10 players.")
         return
 
@@ -151,7 +156,6 @@ async def start(ctx):
     round_number = 1
     captain_index = random.randint(0, len(players) - 1)
 
-    # Reset state
     roles_assigned.clear()
     spy_list.clear()
     votes.clear()
@@ -159,7 +163,7 @@ async def start(ctx):
     mission_results.clear()
     current_team.clear()
 
-    spy_counts = {1:1, 3:2, 4:1, 5: 2, 6: 2, 7: 3, 8: 3, 9: 3, 10: 4}
+    spy_counts = {1: 1, 5: 2, 6: 2, 7: 3, 8: 3, 9: 3, 10: 4}
     num_spies = spy_counts[len(players)]
 
     roles = ["Spy"] * num_spies + ["Resistance"] * (len(players) - num_spies)
@@ -181,7 +185,11 @@ async def start(ctx):
         except:
             await ctx.send(f"Couldn't DM {p.name}.")
 
-    await ctx.send(f"Game started. Team Captain: **{players[captain_index].mention}**. Use `!team @p1 @p2 ...` to pick a mission team.")
+    await ctx.send(f"""
+**Game Started!**
+Team Captain: **{players[captain_index].name}**
+Use `!team @p1 @p2 ...` to select your mission team.
+""")
 
 @bot.command()
 async def team(ctx, *mentions: discord.Member):
@@ -196,16 +204,18 @@ async def team(ctx, *mentions: discord.Member):
         return
 
     votes.clear()
-    await ctx.send(f"Team Captain: **{ctx.author.mention}** Proposed team: {', '.join(p.mention for p in current_team)}")
+
+    await ctx.send(f"""
+**Team Proposal**
+Captain: {ctx.author.name}
+Team Members: {', '.join(p.name for p in current_team)}
+""")
+
     for p in players:
-        try:
-            await p.send("Do you approve this team?", view=VoteView(p))
-        except:
-            await ctx.send(f"Couldn't DM {p.name}.")
+        await ctx.send(f"{p.name}, do you approve this team?", view=VoteView(p))
 
 @bot.event
 async def on_ready():
-    print(f" Logged in as {bot.user}")
+    print(f"Logged in as {bot.user}")
 
 bot.run(TOKEN)
-#testing
