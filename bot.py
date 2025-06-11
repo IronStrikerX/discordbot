@@ -82,13 +82,46 @@ class MissionView(View):
         self.stop()
         await check_all_mission_votes(interaction)
 
+class GameModeView(View):
+    def __init__(self, ctx, mentioned_players):
+        super().__init__(timeout=60)
+        self.ctx = ctx
+        self.mentioned_players = mentioned_players
+        self.selection = None
+
+    @discord.ui.button(label="Normal", style=discord.ButtonStyle.blurple)
+    async def normal(self, interaction: discord.Interaction, button: Button):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("Only the game starter can choose the mode.", ephemeral=True)
+            return
+        self.selection = "normal"
+        self.stop()
+
+    @discord.ui.button(label="Merlin", style=discord.ButtonStyle.green)
+    async def merlin(self, interaction: discord.Interaction, button: Button):
+        if interaction.user != self.ctx.author:
+            await interaction.response.send_message("Only the game starter can choose the mode.", ephemeral=True)
+            return
+        self.selection = "merlin"
+        self.stop()
+
 # START COMMAND
 @bot.command()
-async def start(ctx):
+async def start(ctx, *args: discord.Member):
+    global players
+
     global players, roles_assigned, spy_list, captain_index, round_number, game_channel
-    mentioned = ctx.message.mentions
+    mentioned = list(args)
     if len(mentioned) < 1 or len(mentioned) > 10:
         await ctx.send("Mention between 5 to 10 players to start.")
+        return
+
+    view = GameModeView(ctx, mentioned)
+    await ctx.send(f"{ctx.author.mention}, choose the game mode:", view=view, ephemeral=True)
+    await view.wait()
+
+    if view.selection is None:
+        await ctx.send("Timed out. Please try again.")
         return
 
     players[:] = mentioned
@@ -96,6 +129,12 @@ async def start(ctx):
     captain_index = random.randint(0, len(players) - 1)
     game_channel = ctx.channel
 
+    if view.selection == "normal":
+        await assign_normal_roles(ctx)
+    else:
+        await assign_merlin_roles(ctx)
+
+async def assign_normal_roles(ctx):
     spy_counts = {1: 1, 5:2, 6:2, 7:3, 8:3, 9:3, 10:4}
     num_spies = spy_counts[len(players)]
 
@@ -121,11 +160,64 @@ async def start(ctx):
         except:
             await ctx.send(f"Couldn't DM {p.name}")
 
-    await ctx.send(f"Game started. First Team Captain: **{players[captain_index].mention}**.\nUse `!team @p1 @p2 ...` to propose a mission team.")
+    await ctx.send(f"Normal Resistance game started. First Team Captain: **{players[captain_index].mention}**.\nUse `!team @p1 @p2 ...` to propose a mission team.")
+
+
+async def assign_merlin_roles(ctx):
+    # 5-player recommended: Merlin, Percival, Resistance, Morgana, Assassin
+    special_roles = ["Merlin", "Percival", "Servant", "Morgana", "Assassin"]
+    random.shuffle(special_roles)
+
+    roles_assigned.clear()
+    spy_list.clear()
+
+    for p, r in zip(players, special_roles):
+        roles_assigned[p.id] = r
+        if r in ["Morgana", "Assassin"]:
+            spy_list.append(p)
+
+    for p in players:
+        try:
+            r = roles_assigned[p.id]
+            if r == "Merlin":
+                evil_players = [
+                    discord.utils.get(ctx.guild.members, id=pid).name 
+                    for pid, role in roles_assigned.items() 
+                    if role in ["Morgana", "Assassin"]
+                ]
+                await p.send(f"You are **Merlin**.\nEvil players: {', '.join(evil_players)}")
+
+            elif r == "Percival":
+                targets = [pid for pid, role in roles_assigned.items() if role in ["Merlin", "Morgana"]]
+                names = [discord.utils.get(ctx.guild.members, id=pid).name for pid in targets]
+                await p.send(f"You are **Percival**.\nMerlin might be one of: {', '.join(names)}")
+
+            elif r == "Morgana":
+                others = [s.name for s in spy_list if s != p]
+                await p.send(f"You are **Morgana**. Your fellow spy: {', '.join(others) if others else 'none'}")
+
+            elif r == "Assassin":
+                others = [s.name for s in spy_list if s != p]
+                await p.send(f"You are **Assassin**. Your fellow spy: {', '.join(others) if others else 'none'}")
+
+            else:
+                await p.send("You are **Servant**.")
+        except:
+            await ctx.send(f"Couldn't DM {p.name}")
+
+    await ctx.send(f"Avalon (Merlin) game started. First Team Captain: **{players[captain_index].mention}**.\nUse `!team @p1 @p2 ...` to propose a mission team.")
+
+
+
+# COMMANDS
 
 # TEAM COMMAND
 @bot.command()
 async def team(ctx, *mentions: discord.Member):
+    if not players:  # No game active
+        await ctx.send("No game running. Use `!start` first.", ephemeral=True)
+        return
+
     global current_team, votes
     if ctx.author != players[captain_index]:
         await ctx.send("Only the current team captain can select a team.")
@@ -137,14 +229,67 @@ async def team(ctx, *mentions: discord.Member):
         return
 
     votes.clear()
-    await ctx.send(f"-------------------------------------\nTeam Captain: **{ctx.author.mention}** proposes:\n{', '.join(p.mention for p in current_team)}")
+    if not ctx.interaction:  # Only send if not triggered by a button
+        await ctx.send(f"------------------------------------- \n")
+        await ctx.send(f"Team Captain: **{ctx.author.mention}** proposes:\n{', '.join(p.mention for p in current_team)}")
     
 
     for p in players:
-        try:
+        try:    
             await p.send("Do you approve this team?", view=VoteView(p))
         except:
             await ctx.send(f"Couldn't DM {p.name}")
+
+#STATUS COMMAND
+@bot.command()
+async def status(ctx):
+    if not players:
+        await ctx.send("No game is currently running.")
+        return
+
+    mission_display = []
+    for i, mission in enumerate(mission_results, start=1):
+        passes = mission.count("Pass")
+        fails = mission.count("Fail")
+        result = "PASS" if fails == 0 else "FAIL"
+        mission_display.append(f"**Mission {i}**: {passes} Pass, {fails} Fail → {result}")
+
+    if not mission_display:
+        mission_display = ["No missions have been run yet."]
+
+    current_team_names = [p.mention for p in current_team] if current_team else ["No team proposed yet."]
+
+    status_msg = (
+        f"**Game Status**\n"
+        f"➤ Round: {round_number} / 5\n"
+        f"➤ Team Captain: {players[captain_index].mention}\n"
+        f"➤ Current Team: {', '.join(current_team_names)}\n\n"
+        f"**Mission History:**\n" + "\n".join(mission_display)
+    )
+
+    await ctx.send(status_msg)
+
+
+#ENDGAME COMMAND
+@bot.command()
+async def endgame(ctx):
+    global players, roles_assigned, captain_index, current_team, votes
+    global mission_votes, spy_list, mission_results, round_number
+    global game_channel
+
+    # Reset all variables
+    players.clear()
+    roles_assigned.clear()
+    captain_index = 0
+    current_team.clear()
+    votes.clear()
+    mission_votes.clear()
+    spy_list.clear()
+    mission_results.clear()
+    round_number = 1
+    game_channel = None
+
+    await ctx.send("Game reset. You can now start a new game.")
 
 # CHECK ALL VOTES
 async def check_all_votes(interaction):
@@ -156,9 +301,7 @@ async def check_all_votes(interaction):
         approved = [p.mention for p in players if votes.get(p.id)]
         rejected = [p.mention for p in players if not votes.get(p.id)]
 
-        # Send summary
-
-        await channel.send(f"-------------------------------------\n")
+        # Send summary        
         if approvals > len(players) / 2:
             await channel.send("Team **Approved**. Sending mission DMs...")
             mission_votes.clear()
@@ -185,7 +328,6 @@ async def check_all_mission_votes(interaction):
         random.shuffle(results)
         mission_results.append(results)
 
-        await channel.send(f"-------------------------------------\n")
         await channel.send(f"**Mission #{round_number} results:**")
         for r in results:
             await channel.send(r)
